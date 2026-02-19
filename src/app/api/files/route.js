@@ -1,4 +1,11 @@
-import s3 from "@/app/lib/s3";
+import s3Client from "@/app/lib/s3";
+import {
+    PutObjectCommand,
+    ListObjectsV2Command,
+    DeleteObjectCommand,
+    GetObjectCommand
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { nanoid } from "nanoid";
 import { NextResponse } from "next/server";
 
@@ -7,12 +14,13 @@ export async function POST(req) {
         const { fileName, fileType } = await req.json();
         const key = `uploads/${nanoid()}-${fileName}`;
 
-        const uploadUrl = await s3.getSignedUrlPromise("putObject", {
+        const command = new PutObjectCommand({
             Bucket: process.env.AWS_BUCKET_NAME,
             Key: key,
             ContentType: fileType,
-            Expires: 60,
         });
+
+        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 60 });
 
         return NextResponse.json({ uploadUrl, key });
     } catch (error) {
@@ -23,18 +31,20 @@ export async function POST(req) {
 
 export async function GET() {
     try {
-        const data = await s3.listObjectsV2({
+        const command = new ListObjectsV2Command({
             Bucket: process.env.AWS_BUCKET_NAME,
             Prefix: 'uploads/'
-        }).promise();
+        });
+
+        const data = await s3Client.send(command);
 
         const files = await Promise.all(
             (data.Contents || []).map(async (file) => {
-                const url = await s3.getSignedUrlPromise("getObject", {
+                const getCommand = new GetObjectCommand({
                     Bucket: process.env.AWS_BUCKET_NAME,
                     Key: file.Key,
-                    Expires: 3600, // URL valid for 1 hour
                 });
+                const url = await getSignedUrl(s3Client, getCommand, { expiresIn: 3600 });
                 return { ...file, url };
             })
         );
@@ -51,10 +61,12 @@ export async function DELETE(req) {
     try {
         const { key } = await req.json();
 
-        await s3.deleteObject({
+        const command = new DeleteObjectCommand({
             Bucket: process.env.AWS_BUCKET_NAME,
             Key: key,
-        }).promise();
+        });
+
+        await s3Client.send(command);
 
         return NextResponse.json({ success: true });
     } catch (error) {
